@@ -11,7 +11,7 @@ void printUsage(const char* opt){
 
 int main(int argc,char** argv) {
     std::string rtsp_path;
-    int rate;
+    int rate = 0;
     char* endptr;
     if(argc < 2){
         printUsage(argv[0]);
@@ -25,7 +25,7 @@ int main(int argc,char** argv) {
             return 0;
         }else if(arg == "-p" || arg == "--path"){
             std::cout<<arg<<" "<<argv[i+1]<<"\n";
-            rtsp_path = argv[i];
+            rtsp_path = std::string(argv[i+1]);
         }else if(arg == "-r" || arg == "--rate"){
             std::cout<<arg<<" "<<argv[i+1]<<"\n";
             rate = strtol(argv[i+1],&endptr,10);

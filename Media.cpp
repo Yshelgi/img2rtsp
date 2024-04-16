@@ -64,6 +64,48 @@ bool Media::initObject() {
     if(!m_packet || !m_Frame || !m_swsContext){
         return false;
     }
+
+    // 定义输出流
+    avformat_alloc_output_context2(&m_outputFormatContext, nullptr,"rtsp",m_rtspPath.c_str());
+
+    //定义传输协议
+    av_opt_set(m_outputFormatContext->priv_data,"rtsp_transport","tcp",0);
+    av_dump_format(m_outputFormatContext,0,m_outputFormatContext->url,1);
+    m_outputCodec = avcodec_find_encoder(AV_CODEC_ID_H264);
+    m_outputCodeContext = avcodec_alloc_context3(m_outputCodec);
+
+    m_outputCodeContext->pix_fmt = AV_PIX_FMT_YUV420P;
+    m_outputCodeContext->codec_type = AVMEDIA_TYPE_VIDEO;
+    m_outputCodeContext->width = m_inputCodecContext->width;
+    m_outputCodeContext->height = m_inputCodecContext->height;
+    m_outputCodeContext->framerate = {m_frameRate,1};
+    m_outputCodeContext->time_base = {1,m_frameRate};
+
+    // 输出流码率,I帧，B帧以及间隔设置
+    m_outputCodeContext->bit_rate = 4000000;
+    m_outputCodeContext->gop_size =10;
+    m_outputCodeContext->max_b_frames = 0;
+    m_outputCodeContext->time_base.num = 1;
+    m_outputCodeContext->time_base.den = 25;
+    m_outputCodeContext->qmin = 10;
+    m_outputCodeContext->qmax = 51;
+    if(m_outputFormatContext->oformat->flags & AVFMT_GLOBALHEADER){
+        m_outputCodeContext->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    }
+
+    AVDictionary* param = nullptr;
+    av_opt_set(m_outputCodeContext->priv_data,"tune","zerolatency",AV_DICT_MATCH_CASE);
+    avcodec_open2(m_outputCodeContext,m_outputCodec,&param);
+
+    av_dict_free(&param);
+    // 创建输出流
+    m_outputStream = avformat_new_stream(m_outputFormatContext,m_outputCodec);
+    m_outputStream->time_base.num = 1;
+    m_outputStream->time_base.den = 25;
+    m_outputStream->codecpar->codec_type = m_outputCodeContext->codec_type;
+    avcodec_parameters_from_context(m_outputStream->codecpar,m_outputCodeContext);
+    av_dump_format(m_outputFormatContext,0,m_outputFormatContext->url,1);
+
     return true;
 }
 
@@ -130,47 +172,6 @@ void Media::push() {
     av_image_fill_arrays(m_YUVFrame->data,m_YUVFrame->linesize,
                          outBuffer,AV_PIX_FMT_YUV420P,
                          m_inputCodecContext->width,m_inputCodecContext->height,4);
-
-    // 定义输出流
-    avformat_alloc_output_context2(&m_outputFormatContext, nullptr,"rtsp",m_rtspPath.c_str());
-
-    //定义传输协议
-    av_opt_set(m_outputFormatContext->priv_data,"rtsp_transport","tcp",0);
-    av_dump_format(m_outputFormatContext,0,m_outputFormatContext->url,1);
-    m_outputCodec = avcodec_find_encoder(AV_CODEC_ID_H264);
-    m_outputCodeContext = avcodec_alloc_context3(m_outputCodec);
-
-    m_outputCodeContext->pix_fmt = AV_PIX_FMT_YUV420P;
-    m_outputCodeContext->codec_type = AVMEDIA_TYPE_VIDEO;
-    m_outputCodeContext->width = m_inputCodecContext->width;
-    m_outputCodeContext->height = m_inputCodecContext->height;
-    m_outputCodeContext->framerate = {m_frameRate,1};
-    m_outputCodeContext->time_base = {1,m_frameRate};
-
-    // 输出流码率,I帧，B帧以及间隔设置
-    m_outputCodeContext->bit_rate = 4000000;
-    m_outputCodeContext->gop_size =10;
-    m_outputCodeContext->max_b_frames = 0;
-    m_outputCodeContext->time_base.num = 1;
-    m_outputCodeContext->time_base.den = 25;
-    m_outputCodeContext->qmin = 10;
-    m_outputCodeContext->qmax = 51;
-    if(m_outputFormatContext->oformat->flags & AVFMT_GLOBALHEADER){
-        m_outputCodeContext->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    }
-
-    AVDictionary* param = nullptr;
-    av_opt_set(m_outputCodeContext->priv_data,"tune","zerolatency",AV_DICT_MATCH_CASE);
-    avcodec_open2(m_outputCodeContext,m_outputCodec,&param);
-
-    av_dict_free(&param);
-    // 创建输出流
-    m_outputStream = avformat_new_stream(m_outputFormatContext,m_outputCodec);
-    m_outputStream->time_base.num = 1;
-    m_outputStream->time_base.den = 25;
-    m_outputStream->codecpar->codec_type = m_outputCodeContext->codec_type;
-    avcodec_parameters_from_context(m_outputStream->codecpar,m_outputCodeContext);
-    av_dump_format(m_outputFormatContext,0,m_outputFormatContext->url,1);
 
     if(!(m_outputFormatContext->oformat->flags & AVFMT_NOFILE)){
         if(avio_open(&m_outputFormatContext->pb,m_outputFormatContext->url,AVIO_FLAG_WRITE) < 0){

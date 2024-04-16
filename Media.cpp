@@ -5,14 +5,16 @@
 #include "Media.h"
 #include <utility>
 
-extern "C" {
+extern "C" {        // 用C规则编译指定的代码
 #include "libavcodec/avcodec.h"
-#include "libavdevice/avdevice.h"
 #include "libavformat/avformat.h"
+#include "libavutil/avutil.h"
 #include "libswscale/swscale.h"
-#include "libavutil/time.h"
 #include "libavutil/imgutils.h"
+#include "libavdevice/avdevice.h"
 }
+
+#define USE_WINDOWS 1
 
 void Media::initFFmpeg() {
     avdevice_register_all();
@@ -27,11 +29,15 @@ Media::Media(std::string rtspPath, int frameRate) {
     m_frameRate = frameRate;
 
     // 从屏幕截图
-    // m_inputFormat = av_find_input_format("gdigrab");
+#if USE_WINDOWS
+    m_inputFormat = av_find_input_format("gdigrab");
+#else
     m_inputFormat = av_find_input_format("x11grab");
+#endif
     if(!m_inputFormat){
         std::cout<<"[Error] 截图初始化失败  \n";
     }
+    m_inputFormatContext = avformat_alloc_context();
 }
 
 Media::~Media() {
@@ -44,6 +50,8 @@ bool Media::initObject() {
     m_packet = av_packet_alloc();
     m_Frame = av_frame_alloc();
     m_YUVFrame = av_frame_alloc();
+
+    std::cout<<"[INFO] grab size: "<<m_inputCodecContext->width<<" "<<m_inputCodecContext->height<<"\n";
 
     m_YUVFrame->format = AV_PIX_FMT_YUV420P;
     m_YUVFrame->width = m_inputCodecContext->width;
@@ -61,37 +69,55 @@ bool Media::initObject() {
 
 
 bool Media::open() {
-    int ret = 0;
+    int ret;
     AVDictionary* dict = nullptr;
-//    av_dict_set(&dict, "framerate", reinterpret_cast<const char *>(m_frameRate), 0);
-//    av_dict_set(&dict,"draw_mouse","1",0);
+    AVStream* videoStream = nullptr;
+    const AVCodec* inputCodec = nullptr;
+#if USE_WINDOWS
+    av_dict_set(&dict, "framerate", std::to_string(m_frameRate).c_str(), 0);
+    av_dict_set(&dict,"draw_mouse","1",0);
+#endif
     av_dict_set(&dict,"video_size","1920x1080",0);
+    av_dict_set(&dict,"preset","ultrafast",0);
+    av_dict_set(&dict,"probesize","42M",0);
 
-//    ret = avformat_open_input(&m_formatContext,"desktop",m_inputFormat,&dict);
+#if USE_WINDOWS
+    ret = avformat_open_input(&m_inputFormatContext,"desktop",m_inputFormat,&dict);
+#else
     ret = avformat_open_input(&m_inputFormatContext,"",m_inputFormat,&dict);
-    if(dict){
-        av_dict_free(&dict);
-    }
+#endif
 
     if(ret<0){
         std::cout<<"[ERROR] 截取屏幕失败"<<__FUNCTION__ <<" "<<__LINE__<<" \n";
         free();
         return false;
     }
+
+    ret = avformat_find_stream_info(m_inputFormatContext, nullptr);
+    if(ret < 0){
+        std::cout<<"[ERROR] stream info get error"<<__FUNCTION__ <<" "<<__LINE__<<"\n";
+    }
+
     // 根据视频找到对应解码器
     m_videoIndex = av_find_best_stream(m_inputFormatContext,AVMEDIA_TYPE_VIDEO,-1,-1,nullptr,0);
-    AVStream* videoStream = m_inputFormatContext->streams[m_videoIndex];
-    const AVCodec* inputCodec = avcodec_find_decoder(videoStream->codecpar->codec_id);
+    videoStream = m_inputFormatContext->streams[m_videoIndex];
+    inputCodec = avcodec_find_decoder(videoStream->codecpar->codec_id);
 
     //分配解码器
     m_inputCodecContext = avcodec_alloc_context3(inputCodec);
-    ret = avcodec_parameters_to_context(m_inputCodecContext,videoStream->codecpar);
+    avcodec_parameters_to_context(m_inputCodecContext,videoStream->codecpar);
     m_inputCodecContext->flags |= AV_CODEC_FLAG2_FAST;
     m_inputCodecContext->thread_count = 12;
 
     // 打开编码器
-    avcodec_open2(m_inputCodecContext,inputCodec, nullptr);
+    avcodec_open2(m_inputCodecContext, inputCodec, nullptr);
     initObject();
+
+    if(dict){
+        av_dict_free(&dict);
+        dict = nullptr;
+    }
+
     return false;
 }
 
@@ -156,7 +182,7 @@ void Media::push() {
     // 写输出文件头
     ret = avformat_write_header(m_outputFormatContext, nullptr);
     if(ret<0){
-        std::cout<<"[ERROR] 文件头写入失败"<<__FUNCTION__ <<" "<<__LINE__<<"\n";
+        std::cout<<"[ERROR] 文件头写入失败 "<<__FUNCTION__<<" "<<__LINE__<<"\n";
     }
 
     av_new_packet(pkt,m_bufferSize);
